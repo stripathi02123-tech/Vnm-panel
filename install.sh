@@ -1,73 +1,65 @@
 #!/usr/bin/env bash
-
-# ============================================================
-# HKVM PANEL V3 — CLEAN ULTRA INSTALLER
-# GitHub ZIP -> extract -> install -> configure -> start
-#
-# This development installer intentionally DISABLES licensing.
-# No license key is requested.
-# ============================================================
-
 set -Eeuo pipefail
 
-RED='\e[1;31m'
-GREEN='\e[1;32m'
-YELLOW='\e[1;33m'
-CYAN='\e[1;36m'
-MAGENTA='\e[1;35m'
-NC='\e[0m'
+# ============================================================================
+# VNM / HKVM PANEL — PRODUCTION INSTALLER
+# GitHub repository -> Vnm-panel.zip -> Hkvm/app.js -> install -> run
+# Development build: licensing disabled, no license prompt.
+# ============================================================================
 
-REPO_URL='https://github.com/stripathi02123-tech/Vnm-panel.git'
-ZIP_NAME='Vnm-panel.zip'
+readonly RED='\033[1;31m'
+readonly GREEN='\033[1;32m'
+readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[1;36m'
+readonly MAGENTA='\033[1;35m'
+readonly WHITE='\033[1;37m'
+readonly NC='\033[0m'
 
-INSTALL_DIR='/opt/hkvm'
-APP_DIR="${INSTALL_DIR}/app"
-DATA_DIR="${INSTALL_DIR}/data"
-LOG_DIR="${INSTALL_DIR}/logs"
-BACKUP_DIR="${INSTALL_DIR}/backups"
-ETC_DIR='/etc/hkvm'
-ENV_FILE="${ETC_DIR}/hkvm.env"
-LOG_FILE="${LOG_DIR}/hkvm.log"
-PID_FILE="${INSTALL_DIR}/hkvm.pid"
-SERVICE_NAME='hkvm'
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-PANEL_PORT="${PANEL_PORT:-8080}"
-NODE_MIN_MAJOR=20
+readonly REPO_URL='https://github.com/stripathi02123-tech/Vnm-panel.git'
+readonly ZIP_NAME='Vnm-panel.zip'
+readonly INSTALL_DIR='/opt/hkvm'
+readonly APP_DIR="${INSTALL_DIR}/app"
+readonly DATA_DIR="${INSTALL_DIR}/data"
+readonly LOG_DIR="${INSTALL_DIR}/logs"
+readonly BACKUP_DIR="${INSTALL_DIR}/backups"
+readonly ENV_FILE="${INSTALL_DIR}/.env"
+readonly PID_FILE="${INSTALL_DIR}/hkvm.pid"
+readonly CREDENTIALS_FILE="${INSTALL_DIR}/admin-credentials.txt"
+readonly SERVICE_NAME='hkvm'
+readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+readonly PORT="${PORT:-8080}"
 
 TMP_DIR=''
+NODE_BIN=''
+NPM_BIN=''
+APP_JS=''
 HAS_SYSTEMD='false'
 
-line(){ echo -e "${MAGENTA}============================================================${NC}"; }
-info(){ echo -e "${CYAN}[INFO]${NC} $*"; }
-ok(){ echo -e "${GREEN}[OK]${NC} $*"; }
-warn(){ echo -e "${YELLOW}[WARNING]${NC} $*"; }
-error(){ echo -e "${RED}[ERROR]${NC} $*"; }
+line(){ printf '%b\n' "${MAGENTA}============================================================${NC}"; }
+info(){ printf '%b\n' "${CYAN}[INFO]${NC} $*"; }
+ok(){ printf '%b\n' "${GREEN}[OK]${NC} $*"; }
+warn(){ printf '%b\n' "${YELLOW}[WARNING]${NC} $*"; }
+error(){ printf '%b\n' "${RED}[ERROR]${NC} $*" >&2; }
 die(){ error "$*"; exit 1; }
 
 cleanup(){
+    local rc=$?
     [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -rf "${TMP_DIR}" || true
+    if (( rc != 0 )); then
+        error "Installation failed (exit ${rc})."
+        if [[ -f "${LOG_DIR}/hkvm.log" ]]; then
+            echo '---------------- HKVM LOG ----------------' >&2
+            tail -n 180 "${LOG_DIR}/hkvm.log" >&2 || true
+            echo '-------------------------------------------' >&2
+        fi
+    fi
 }
 trap cleanup EXIT
 
-on_error(){
-    local rc=$?
-    error "Installer failed at line ${BASH_LINENO[0]} (exit ${rc})."
-    if [[ -f "${LOG_FILE}" ]]; then
-        echo '---------------- HKVM LOG ----------------'
-        tail -n 150 "${LOG_FILE}" || true
-        echo '-------------------------------------------'
-    fi
-    exit "${rc}"
-}
-trap on_error ERR
-
-# ============================================================
-# HEADER
-# ============================================================
-
-clear 2>/dev/null || true
-echo -e "${CYAN}"
-cat <<'EOF'
+print_logo(){
+    clear 2>/dev/null || true
+    printf '%b\n' "${CYAN}"
+    cat <<'EOF'
 
 ██╗  ██╗██╗  ██╗██╗   ██╗███╗   ███╗
 ██║ ██╔╝██║ ██╔╝██║   ██║████╗ ████║
@@ -77,290 +69,296 @@ cat <<'EOF'
 ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝     ╚═╝
 
              HKVM PANEL V3
-          CLEAN ULTRA INSTALLER
+          PRODUCTION INSTALLER
 
 EOF
-echo -e "${NC}"
-line
+    printf '%b\n' "${NC}"
+    line
+}
 
-# ============================================================
-# BASIC ENVIRONMENT
-# ============================================================
+check_os(){
+    [[ ${EUID} -eq 0 ]] || die 'Run this installer as root.'
+    [[ -f /etc/os-release ]] || die 'Cannot detect operating system.'
+    # shellcheck disable=SC1091
+    source /etc/os-release
 
-[[ "${EUID}" -eq 0 ]] || die 'Run this installer as root.'
-[[ -f /etc/os-release ]] || die 'Cannot detect operating system.'
-# shellcheck disable=SC1091
-source /etc/os-release
+    info "Operating System : ${PRETTY_NAME:-unknown}"
+    info "Architecture     : $(uname -m)"
+    info "Kernel           : $(uname -r)"
 
-info "Operating System : ${PRETTY_NAME:-unknown}"
-info "Architecture     : $(uname -m)"
-info "Kernel           : $(uname -r)"
+    [[ "${ID:-}" == 'ubuntu' || "${ID:-}" == 'debian' ]] ||
+        die "Unsupported OS: ${ID:-unknown}. Ubuntu/Debian only."
 
-case "${ID:-}" in
-    ubuntu|debian) ;;
-    *) die "Unsupported operating system: ${ID:-unknown}. Use Ubuntu or Debian." ;;
-esac
-
-if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    HAS_SYSTEMD='true'
-    ok 'systemd detected — service mode enabled.'
-else
-    HAS_SYSTEMD='false'
-    warn 'systemd not detected — standalone/background mode enabled.'
-fi
-
-line
-
-# ============================================================
-# SYSTEM PACKAGES
-# ============================================================
-
-export DEBIAN_FRONTEND=noninteractive
-
-info 'Updating package lists...'
-apt-get update -y
-
-info 'Installing system dependencies...'
-apt-get install -y \
-    ca-certificates \
-    curl \
-    git \
-    unzip \
-    file \
-    lsof \
-    procps \
-    iproute2 \
-    openssl \
-    build-essential \
-    python3 \
-    qemu-system-x86 \
-    qemu-utils \
-    cloud-init
-
-ok 'System dependencies installed.'
-line
-
-# ============================================================
-# NODE.JS
-# ============================================================
-
-NODE_OK='false'
-if command -v node >/dev/null 2>&1; then
-    NODE_VERSION="$(node -v | sed 's/^v//')"
-    NODE_MAJOR="${NODE_VERSION%%.*}"
-    info "Detected Node.js: v${NODE_VERSION}"
-    if [[ "${NODE_MAJOR}" =~ ^[0-9]+$ ]] && (( NODE_MAJOR >= NODE_MIN_MAJOR )); then
-        NODE_OK='true'
+    local init_name
+    init_name="$(ps -p 1 -o comm= 2>/dev/null || true)"
+    if command -v systemctl >/dev/null 2>&1 &&
+       [[ -d /run/systemd/system ]] &&
+       [[ "${init_name}" == 'systemd' ]]; then
+        HAS_SYSTEMD='true'
+        ok 'systemd detected — service mode enabled.'
+    else
+        HAS_SYSTEMD='false'
+        warn 'systemd not detected — standalone/background mode enabled.'
+        info 'This is normal in GitHub Codespaces and containers.'
     fi
-fi
+}
 
-if [[ "${NODE_OK}" != 'true' ]]; then
-    info 'Installing Node.js 22...'
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    apt-get install -y nodejs
-fi
+install_packages(){
+    export DEBIAN_FRONTEND=noninteractive
+    info 'Updating package lists...'
+    apt-get update -y
 
-command -v node >/dev/null 2>&1 || die 'Node.js installation failed.'
-command -v npm >/dev/null 2>&1 || die 'npm installation failed.'
-ok "Node.js: $(node -v) | npm: $(npm -v)"
-line
+    info 'Installing base dependencies...'
+    apt-get install -y \
+        ca-certificates curl git unzip file lsof procps iproute2 \
+        openssl build-essential python3 sqlite3 libsqlite3-dev rsync
 
-# ============================================================
-# STORAGE / EXISTING INSTALL
-# ============================================================
-
-info "Preparing ${INSTALL_DIR}..."
-mkdir -p "${INSTALL_DIR}" "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}" "${ETC_DIR}"
-chmod 755 "${INSTALL_DIR}" "${DATA_DIR}" "${LOG_DIR}"
-chmod 700 "${BACKUP_DIR}" "${ETC_DIR}"
-touch "${LOG_FILE}"
-chmod 640 "${LOG_FILE}"
-
-if [[ -f "${ENV_FILE}" ]]; then
-    cp -a "${ENV_FILE}" "${BACKUP_DIR}/hkvm.env.$(date +%Y%m%d-%H%M%S).bak"
-    ok 'Existing HKVM configuration backed up.'
-fi
-
-# Stop the known service and the known standalone process.
-if [[ "${HAS_SYSTEMD}" == 'true' ]]; then
-    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-fi
-
-if [[ -f "${PID_FILE}" ]]; then
-    OLD_PID="$(cat "${PID_FILE}" 2>/dev/null || true)"
-    if [[ "${OLD_PID}" =~ ^[0-9]+$ ]]; then
-        kill "${OLD_PID}" >/dev/null 2>&1 || true
-        for _ in {1..15}; do
-            kill -0 "${OLD_PID}" >/dev/null 2>&1 || break
-            sleep 0.2
-        done
-        kill -9 "${OLD_PID}" >/dev/null 2>&1 || true
+    if [[ "${HAS_SYSTEMD}" == 'true' ]]; then
+        info 'Installing virtualization dependencies...'
+        apt-get install -y \
+            qemu-system-x86 qemu-utils ovmf cloud-init \
+            libvirt-daemon-system libvirt-clients
+    else
+        warn 'Skipping libvirt/QEMU host stack in container mode.'
     fi
-    rm -f "${PID_FILE}"
-fi
+    ok 'System dependencies installed.'
+    line
+}
 
-# If port 8080 is occupied, terminate only a process clearly belonging to HKVM.
-if command -v lsof >/dev/null 2>&1; then
-    mapfile -t PIDS < <(lsof -t -nP -iTCP:"${PANEL_PORT}" -sTCP:LISTEN 2>/dev/null || true)
-    for LISTEN_PID in "${PIDS[@]:-}"; do
-        [[ "${LISTEN_PID}" =~ ^[0-9]+$ ]] || continue
-        CMD="$(ps -p "${LISTEN_PID}" -o args= 2>/dev/null || true)"
-        CWD="$(readlink -f "/proc/${LISTEN_PID}/cwd" 2>/dev/null || true)"
-        if [[ "${CWD}" == "${APP_DIR}" ]] || [[ "${CMD}" == *"${APP_DIR}/app.js"* ]]; then
-            warn "Stopping old HKVM listener PID ${LISTEN_PID} on port ${PANEL_PORT}."
-            kill "${LISTEN_PID}" >/dev/null 2>&1 || true
-            sleep 1
-            kill -9 "${LISTEN_PID}" >/dev/null 2>&1 || true
+detect_node(){
+    if command -v node >/dev/null 2>&1; then
+        local v major
+        v="$(node -v | sed 's/^v//')"
+        major="${v%%.*}"
+        NODE_BIN="$(command -v node)"
+        if [[ "${major}" =~ ^[0-9]+$ ]] && (( major >= 20 )); then
+            ok "Node.js detected: v${v}"
         else
-            die "Port ${PANEL_PORT} is already used by another process (PID ${LISTEN_PID})."
+            NODE_BIN=''
         fi
-    done
-fi
-
-ok 'Storage prepared.'
-line
-
-# ============================================================
-# DOWNLOAD / EXTRACT
-# ============================================================
-
-TMP_DIR="$(mktemp -d -t hkvm-installer-XXXXXX)"
-REPO_DIR="${TMP_DIR}/repo"
-EXTRACT_DIR="${TMP_DIR}/extract"
-mkdir -p "${EXTRACT_DIR}"
-
-info 'Cloning HKVM repository...'
-git clone --depth 1 --single-branch "${REPO_URL}" "${REPO_DIR}"
-ok 'Repository cloned.'
-
-ZIP_FILE="${REPO_DIR}/${ZIP_NAME}"
-if [[ ! -f "${ZIP_FILE}" ]]; then
-    ZIP_FILE="$(find "${REPO_DIR}" -type f -name "${ZIP_NAME}" -not -path '*/.git/*' -print -quit 2>/dev/null || true)"
-fi
-[[ -n "${ZIP_FILE}" && -f "${ZIP_FILE}" ]] || die "${ZIP_NAME} was not found in the repository."
-
-ZIP_SIZE_MB="$(du -m "${ZIP_FILE}" | awk '{print $1}')"
-info "Found ${ZIP_NAME}: ${ZIP_SIZE_MB} MB"
-(( ZIP_SIZE_MB >= 1 )) || die 'ZIP file is empty or invalid.'
-
-info 'Extracting application...'
-unzip -q "${ZIP_FILE}" -d "${EXTRACT_DIR}"
-ok 'ZIP extracted.'
-line
-
-# ============================================================
-# APPLICATION ROOT DETECTION
-# ============================================================
-
-info 'Detecting real HKVM application root...'
-
-mapfile -t PACKAGE_FILES < <(
-    find "${EXTRACT_DIR}" \
-        -type f \
-        -name package.json \
-        -not -path '*/node_modules/*' \
-        -not -path '*/.git/*' \
-        -print | sort
-)
-
-[[ "${#PACKAGE_FILES[@]}" -gt 0 ]] || die 'No package.json found outside node_modules.'
-
-SOURCE_APP_DIR=''
-
-# Prefer a package with a real start script.
-for PKG in "${PACKAGE_FILES[@]}"; do
-    DIR="$(dirname "${PKG}")"
-    [[ "${DIR}" == *'/node_modules/'* ]] && continue
-    if node -e 'const p=require(process.argv[1]); const s=p.scripts&&p.scripts.start; process.exit(typeof s==="string"&&s.trim()?0:1)' "${PKG}" >/dev/null 2>&1; then
-        SOURCE_APP_DIR="${DIR}"
-        break
     fi
-done
 
-# Then prefer a package with a main entry.
-if [[ -z "${SOURCE_APP_DIR}" ]]; then
-    for PKG in "${PACKAGE_FILES[@]}"; do
-        DIR="$(dirname "${PKG}")"
-        [[ "${DIR}" == *'/node_modules/'* ]] && continue
-        if node -e 'const p=require(process.argv[1]); const m=p.main; process.exit(typeof m==="string"&&m.trim()?0:1)' "${PKG}" >/dev/null 2>&1; then
-            SOURCE_APP_DIR="${DIR}"
-            break
+    if [[ -z "${NODE_BIN}" ]]; then
+        info 'Installing Node.js 22...'
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        apt-get install -y nodejs
+    fi
+
+    NODE_BIN="$(command -v node)"
+    NPM_BIN="$(command -v npm || true)"
+    [[ -x "${NODE_BIN}" ]] || die "Node binary is not executable: ${NODE_BIN}"
+    [[ -x "${NPM_BIN}" ]] || die 'npm was not found.'
+
+    ok "Node.js: $(${NODE_BIN} -v) | npm: $(${NPM_BIN} -v)"
+    info "Node binary: ${NODE_BIN}"
+    line
+}
+
+stop_existing(){
+    info 'Stopping any existing HKVM instance...'
+
+    if [[ "${HAS_SYSTEMD}" == 'true' ]]; then
+        systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    fi
+
+    if [[ -f "${PID_FILE}" ]]; then
+        local pid
+        pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+        if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" >/dev/null 2>&1; then
+            local cmd cwd
+            cmd="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+            cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+            if [[ "${cwd}" == "${APP_DIR}" || "${cmd}" == *"${APP_DIR}/app.js"* ]]; then
+                kill "${pid}" >/dev/null 2>&1 || true
+                for _ in {1..20}; do
+                    kill -0 "${pid}" >/dev/null 2>&1 || break
+                    sleep 0.2
+                done
+                kill -9 "${pid}" >/dev/null 2>&1 || true
+            fi
         fi
-    done
-fi
+        rm -f "${PID_FILE}"
+    fi
 
-# Last fallback: normal Node entry file, never under node_modules.
-if [[ -z "${SOURCE_APP_DIR}" ]]; then
-    mapfile -t ENTRY_FILES < <(
-        find "${EXTRACT_DIR}" \
-            -type f \
-            \( -name app.js -o -name server.js -o -name index.js -o -name main.js \) \
-            -not -path '*/node_modules/*' \
-            -not -path '*/.git/*' \
+    if command -v pgrep >/dev/null 2>&1; then
+        while read -r pid; do
+            [[ -z "${pid}" ]] && continue
+            local cmd cwd
+            cmd="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+            cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+            if [[ "${cwd}" == "${APP_DIR}" || "${cmd}" == *"${APP_DIR}/app.js"* ]]; then
+                kill "${pid}" >/dev/null 2>&1 || true
+            fi
+        done < <(pgrep -f '/opt/hkvm/app/app\.js' 2>/dev/null || true)
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        mapfile -t pids < <(lsof -t -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)
+        for pid in "${pids[@]:-}"; do
+            [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+            local cmd cwd
+            cmd="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+            cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+            if [[ "${cwd}" == "${APP_DIR}" || "${cmd}" == *"${APP_DIR}/app.js"* ]]; then
+                kill "${pid}" >/dev/null 2>&1 || true
+                sleep 1
+                kill -9 "${pid}" >/dev/null 2>&1 || true
+            else
+                die "Port ${PORT} is already used by another process (PID ${pid})."
+            fi
+        done
+    fi
+
+    ok 'Existing HKVM instance stopped.'
+    line
+}
+
+prepare_storage(){
+    info "Preparing ${INSTALL_DIR}..."
+    mkdir -p "${INSTALL_DIR}" "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
+    chmod 755 "${INSTALL_DIR}" "${APP_DIR}" 2>/dev/null || true
+    chmod 755 "${DATA_DIR}" "${LOG_DIR}"
+    chmod 700 "${BACKUP_DIR}"
+    touch "${LOG_DIR}/hkvm.log"
+    chmod 640 "${LOG_DIR}/hkvm.log"
+
+    if [[ -f "${ENV_FILE}" ]]; then
+        cp -a "${ENV_FILE}" "${BACKUP_DIR}/hkvm.env.$(date +%Y%m%d-%H%M%S).bak"
+        ok 'Existing configuration backed up.'
+    fi
+    ok 'Storage prepared.'
+    line
+}
+
+download_and_extract(){
+    TMP_DIR="$(mktemp -d -t hkvm-installer-XXXXXX)"
+    local repo_dir="${TMP_DIR}/repo"
+    local extract_dir="${TMP_DIR}/extract"
+    mkdir -p "${extract_dir}"
+
+    info 'Cloning HKVM repository...'
+    git clone --depth 1 --single-branch "${REPO_URL}" "${repo_dir}"
+    ok 'Repository cloned.'
+
+    local zip_file="${repo_dir}/${ZIP_NAME}"
+    if [[ ! -f "${zip_file}" ]]; then
+        zip_file="$(find "${repo_dir}" -type f -name "${ZIP_NAME}" -not -path '*/.git/*' -print -quit 2>/dev/null || true)"
+    fi
+    [[ -n "${zip_file}" && -f "${zip_file}" ]] || die "${ZIP_NAME} was not found in the repository."
+
+    unzip -t "${zip_file}" >/dev/null || die "${ZIP_NAME} is corrupted or invalid."
+    info "Found ${ZIP_NAME}: $(du -m "${zip_file}" | awk '{print $1}') MB"
+    info 'Extracting application...'
+    unzip -q "${zip_file}" -d "${extract_dir}"
+    ok 'ZIP extracted.'
+    line
+
+    detect_app_root "${extract_dir}"
+}
+
+detect_app_root(){
+    local extract_dir="$1"
+    info 'Detecting real HKVM application root...'
+
+    mapfile -t app_files < <(
+        find "${extract_dir}" -type f -name app.js \
+            -not -path '*/node_modules/*' -not -path '*/.git/*' \
             -print | sort
     )
-    [[ "${#ENTRY_FILES[@]}" -gt 0 ]] && SOURCE_APP_DIR="$(dirname "${ENTRY_FILES[0]}")"
-fi
 
-[[ -n "${SOURCE_APP_DIR}" ]] || die 'Unable to find HKVM application source.'
-[[ "${SOURCE_APP_DIR}" != *'/node_modules/'* ]] || die 'Safety failure: selected application is inside node_modules.'
-
-info "Application root: ${SOURCE_APP_DIR}"
-
-rm -rf "${APP_DIR}"
-mkdir -p "${APP_DIR}"
-cp -a "${SOURCE_APP_DIR}/." "${APP_DIR}/"
-ok "Application installed into ${APP_DIR}."
-line
-
-# ============================================================
-# NODE DEPENDENCIES
-# ============================================================
-
-cd "${APP_DIR}"
-[[ -f package.json ]] || die 'package.json is missing after extraction.'
-
-info 'Installing Node.js dependencies...'
-if [[ -f package-lock.json ]]; then
-    if ! npm ci --omit=dev; then
-        warn 'npm ci failed; retrying with npm install.'
-        npm install --omit=dev
+    local source_dir=''
+    if (( ${#app_files[@]} > 0 )); then
+        for f in "${app_files[@]}"; do
+            local d base
+            d="$(dirname "${f}")"
+            base="$(basename "${d}")"
+            if [[ "${base}" =~ ^[Hh][Kk][Vv][Mm]$ ]] && [[ -f "${d}/package.json" ]]; then
+                source_dir="${d}"
+                break
+            fi
+        done
+        [[ -n "${source_dir}" ]] || source_dir="$(dirname "${app_files[0]}")"
     fi
-else
-    npm install --omit=dev
-fi
 
-info 'Rebuilding native modules...'
-npm rebuild sqlite3 ssh2 >/dev/null 2>&1 || warn 'Native module rebuild returned non-zero; runtime diagnostics will catch startup problems.'
+    [[ -n "${source_dir}" ]] || die 'Could not locate app.js outside node_modules.'
+    [[ -f "${source_dir}/app.js" ]] || die 'Detected root is missing app.js.'
+    [[ -f "${source_dir}/package.json" ]] || die 'Detected root is missing package.json.'
+    [[ "${source_dir}" != *'/node_modules/'* ]] || die 'Safety failure: app root is inside node_modules.'
 
-ok 'Node.js dependencies installed.'
-line
+    info "Application root: ${source_dir}"
+    rm -rf "${APP_DIR}"
+    mkdir -p "${APP_DIR}"
+    rsync -a --exclude='node_modules' --exclude='.git' "${source_dir}/" "${APP_DIR}/"
 
-# ============================================================
-# LOGIN / CSRF FIX
-# ============================================================
+    [[ -f "${APP_DIR}/app.js" ]] || die 'app.js was not copied.'
+    [[ -f "${APP_DIR}/package.json" ]] || die 'package.json was not copied.'
+    ok "Application installed into ${APP_DIR}."
+    line
+}
 
-info 'Applying login compatibility check...'
+install_npm(){
+    cd "${APP_DIR}"
+    info 'Installing Node.js dependencies...'
 
-APP_JS=''
-for CANDIDATE in app.js server.js index.js main.js; do
-    if [[ -f "${APP_DIR}/${CANDIDATE}" ]]; then
-        APP_JS="${APP_DIR}/${CANDIDATE}"
-        break
+    if [[ -f package-lock.json ]]; then
+        if ! "${NPM_BIN}" ci --omit=dev; then
+            warn 'npm ci failed; retrying with npm install.'
+            "${NPM_BIN}" install --omit=dev
+        fi
+    else
+        "${NPM_BIN}" install --omit=dev
     fi
-done
 
-[[ -n "${APP_JS}" ]] || die 'Could not locate the main application JavaScript file.'
+    info 'Rebuilding native modules...'
+    "${NPM_BIN}" rebuild sqlite3 ssh2 >/dev/null 2>&1 || true
 
-cp -a "${APP_JS}" "${BACKUP_DIR}/$(basename "${APP_JS}").$(date +%Y%m%d-%H%M%S).bak"
+    for module in bcryptjs sqlite3 ssh2; do
+        "${NODE_BIN}" -e "require('${module}'); process.stdout.write('ok')" >/dev/null 2>&1 ||
+            die "Required Node module failed to load: ${module}"
+        ok "Runtime module verified: ${module}"
+    done
+    line
+}
 
-python3 - "${APP_JS}" <<'PY'
+write_env(){
+    local session_secret
+    session_secret="$(openssl rand -hex 32)"
+    [[ -n "${session_secret}" ]] || die 'Failed to generate session secret.'
+
+    cat > "${ENV_FILE}" <<EOF
+NODE_ENV=production
+PORT=${PORT}
+VNM_DATA_DIR=${DATA_DIR}
+PANEL_NAME=VNM
+DEFAULT_LOGO_URL=/images/logo.png
+SESSION_SECRET=${session_secret}
+LICENSE_MODE=disabled
+LICENSE_KEY=
+EOF
+    chmod 600 "${ENV_FILE}"
+    ok 'Configuration created.'
+    ok 'License is DISABLED — no key is required.'
+    line
+}
+
+patch_login_csrf(){
+    APP_JS="${APP_DIR}/app.js"
+    info 'Checking login CSRF handling...'
+
+    if ! grep -Eq 'function[[:space:]]+csrfProtection[[:space:]]*\(' "${APP_JS}"; then
+        warn 'Named csrfProtection function was not found; source was not modified.'
+        return 0
+    fi
+
+    cp -a "${APP_JS}" "${BACKUP_DIR}/app.js.csrf.$(date +%Y%m%d-%H%M%S).bak"
+
+    python3 - "${APP_JS}" <<'PY'
 from pathlib import Path
 import re, sys
 
 path = Path(sys.argv[1])
 src = path.read_text(encoding='utf-8')
-
 replacement = r'''function csrfProtection(req, res, next) {
   const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
   const requestPath = (req.originalUrl || req.url || req.path || '/').split('?')[0].replace(/\/+$/, '') || '/';
@@ -378,263 +376,288 @@ replacement = r'''function csrfProtection(req, res, next) {
 
   next();
 }'''
-
 pattern = re.compile(r'function\s+csrfProtection\(req,\s*res,\s*next\)\s*\{.*?\n\}', re.S)
 match = pattern.search(src)
-
-if match:
-    src = src[:match.start()] + replacement + src[match.end():]
-else:
-    # If there is no named function, make both login routes part of the exemption set.
-    set_pattern = re.compile(r'const\s+CSRF_EXEMPT_PATHS\s*=\s*new\s+Set\(\[(.*?)\]\);', re.S)
-    sm = set_pattern.search(src)
-    if sm:
-        body = sm.group(1)
-        if "'/login'" not in body:
-            body += "\n  '/login',"
-        if "'/api/login'" not in body:
-            body += "\n  '/api/login',"
-        src = src[:sm.start(1)] + body + src[sm.end(1):]
-
+if not match:
+    raise SystemExit(2)
+src = src[:match.start()] + replacement + src[match.end():]
 path.write_text(src, encoding='utf-8')
 PY
 
-node --check "${APP_JS}" || die 'Application JavaScript syntax check failed after compatibility patch.'
-ok 'Application syntax check passed.'
-line
+    "${NODE_BIN}" --check "${APP_JS}" || die 'app.js syntax check failed after CSRF compatibility change.'
+    ok 'Login CSRF compatibility check passed.'
+    line
+}
 
-# ============================================================
-# LICENSE OFF + CONFIGURATION
-# ============================================================
+create_service(){
+    [[ "${HAS_SYSTEMD}" == 'true' ]] || return 0
 
-SESSION_SECRET="$(openssl rand -hex 32)"
-[[ -n "${SESSION_SECRET}" ]] || die 'Unable to generate session secret.'
-
-# License intentionally disabled. There is NO prompt and NO key.
-LICENSE_MODE='disabled'
-LICENSE_KEY=''
-
-info 'Writing HKVM configuration...'
-cat > "${ENV_FILE}" <<EOF
-NODE_ENV=production
-PORT=${PANEL_PORT}
-PANEL_NAME=HKVM
-HKVM_DATA_DIR=${DATA_DIR}
-SESSION_SECRET=${SESSION_SECRET}
-LICENSE_MODE=disabled
-LICENSE_KEY=
-HKVM_INSTALL_DIR=${INSTALL_DIR}
-HKVM_APP_DIR=${APP_DIR}
-HKVM_LOG_DIR=${LOG_DIR}
-EOF
-
-chmod 600 "${ENV_FILE}"
-chown root:root "${ENV_FILE}"
-ln -sfn "${ENV_FILE}" "${APP_DIR}/.env"
-
-ok 'Configuration created.'
-ok 'License is DISABLED — no license key is required.'
-line
-
-# ============================================================
-# START COMMAND
-# ============================================================
-
-START_SCRIPT="$(node -e 'const p=require("./package.json"); process.stdout.write((p.scripts&&p.scripts.start)||"")' 2>/dev/null || true)"
-MAIN_FILE="$(node -e 'const p=require("./package.json"); process.stdout.write(p.main||"")' 2>/dev/null || true)"
-
-if [[ -n "${START_SCRIPT}" ]]; then
-    EXEC_START='npm start'
-elif [[ -n "${MAIN_FILE}" && -f "${APP_DIR}/${MAIN_FILE}" ]]; then
-    EXEC_START="node ${APP_DIR}/${MAIN_FILE}"
-else
-    ENTRY=''
-    for CANDIDATE in app.js server.js index.js main.js; do
-        [[ -f "${APP_DIR}/${CANDIDATE}" ]] && { ENTRY="${APP_DIR}/${CANDIDATE}"; break; }
-    done
-    [[ -n "${ENTRY}" ]] || die 'No application start command found.'
-    EXEC_START="node ${ENTRY}"
-fi
-
-info "Start command: ${EXEC_START}"
-
-# ============================================================
-# START
-# ============================================================
-
-if [[ "${HAS_SYSTEMD}" == 'true' ]]; then
     info 'Creating systemd service...'
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=HKVM Panel V3
+Description=VNM/HKVM Panel
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${APP_DIR}
-EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/env bash -lc 'exec ${EXEC_START}'
-Restart=always
-RestartSec=5
 User=root
 Group=root
-LimitNOFILE=1048576
-StandardOutput=append:${LOG_FILE}
-StandardError=append:${LOG_FILE}
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${ENV_FILE}
+ExecStart=${NODE_BIN} ${APP_DIR}/app.js
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+StandardOutput=append:${LOG_DIR}/hkvm.log
+StandardError=append:${LOG_DIR}/hkvm.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     chmod 644 "${SERVICE_FILE}"
+    systemd-analyze verify "${SERVICE_FILE}" || die 'systemd service validation failed.'
     systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1
-    : > "${LOG_FILE}"
-    systemctl start "${SERVICE_NAME}"
-    sleep 5
+    systemctl enable "${SERVICE_NAME}" >/dev/null
+    ok 'systemd service created and validated.'
+    line
+}
 
-    if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
-        error 'HKVM service failed to start.'
-        systemctl status "${SERVICE_NAME}" --no-pager --full || true
-        echo
-        journalctl -u "${SERVICE_NAME}" -n 200 --no-pager || true
-        exit 1
+start_app(){
+    : > "${LOG_DIR}/hkvm.log"
+
+    if [[ "${HAS_SYSTEMD}" == 'true' ]]; then
+        info 'Starting HKVM with systemd...'
+        systemctl restart "${SERVICE_NAME}"
+    else
+        info 'Starting HKVM in standalone/background mode...'
+        cd "${APP_DIR}"
+        nohup "${NODE_BIN}" "${APP_DIR}/app.js" >>"${LOG_DIR}/hkvm.log" 2>&1 &
+        echo "$!" > "${PID_FILE}"
+        chmod 600 "${PID_FILE}"
+    fi
+}
+
+is_hkvm_process(){
+    local pid="$1"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "${pid}" >/dev/null 2>&1 || return 1
+    local cmd cwd
+    cmd="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+    cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+    [[ "${cmd}" == *"${APP_DIR}/app.js"* || "${cwd}" == "${APP_DIR}" ]]
+}
+
+health_check(){
+    line
+    info 'Performing startup health checks...'
+
+    local pid=''
+    local process_ok='false'
+    for _ in {1..30}; do
+        if [[ "${HAS_SYSTEMD}" == 'true' ]]; then
+            pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null || true)"
+        elif [[ -f "${PID_FILE}" ]]; then
+            pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+        fi
+        if [[ -n "${pid}" ]] && is_hkvm_process "${pid}"; then
+            process_ok='true'
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ "${process_ok}" != 'true' ]]; then
+        error 'HKVM process did not remain running.'
+        tail -n 180 "${LOG_DIR}/hkvm.log" || true
+        return 1
+    fi
+    ok "HKVM process is running (PID: ${pid})."
+
+    local listening='false'
+    for _ in {1..15}; do
+        if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+            listening='true'
+            break
+        fi
+        sleep 1
+    done
+    [[ "${listening}" == 'true' ]] || {
+        error "Port ${PORT} is not listening."
+        tail -n 180 "${LOG_DIR}/hkvm.log" || true
+        return 1
+    }
+    ok "Port ${PORT} is listening."
+
+    local code
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
+    if [[ "${code}" =~ ^[1-4][0-9][0-9]$ ]]; then
+        ok "HTTP endpoint responding (${code})."
+    else
+        error "HTTP health check failed (HTTP ${code:-000})."
+        tail -n 180 "${LOG_DIR}/hkvm.log" || true
+        return 1
+    fi
+    line
+}
+
+verify_admin(){
+    # Fresh installs: the app prints a generated password. Verify that password
+    # against the actual bcrypt hash. If it does not match, repair the admin row.
+    local db_file=''
+    for candidate in /root/.vnm/vnm.db "${DATA_DIR}/vnm.db" "${APP_DIR}/data/vnm.db"; do
+        if [[ -f "${candidate}" ]]; then
+            db_file="${candidate}"
+            break
+        fi
+    done
+
+    [[ -n "${db_file}" ]] || { warn 'Admin database not found yet; leaving account setup to the application.'; return 0; }
+
+    local generated
+    generated="$(grep -F 'Default admin created. username: admin  password:' "${LOG_DIR}/hkvm.log" 2>/dev/null | tail -n1 | sed -E 's/^.*password:[[:space:]]*([^[:space:]]+).*$/\1/' || true)"
+
+    if [[ -z "${generated}" ]]; then
+        info 'Existing admin account detected; existing password preserved.'
+        return 0
     fi
 
-    ok 'HKVM service is ONLINE.'
-    RUN_MODE='SYSTEMD'
-else
-    info 'Starting HKVM in standalone/background mode...'
-    : > "${LOG_FILE}"
-    cd "${APP_DIR}"
-    nohup bash -lc "set -a; source '${ENV_FILE}'; set +a; exec ${EXEC_START}" >>"${LOG_FILE}" 2>&1 &
-    HKVM_PID=$!
-    echo "${HKVM_PID}" > "${PID_FILE}"
-    sleep 5
+    local valid
+    valid="$(DB_FILE="${db_file}" DEFAULT_PASSWORD="${generated}" "${NODE_BIN}" <<'NODE' 2>/dev/null || true
+const bcrypt = require('/opt/hkvm/app/node_modules/bcryptjs');
+const sqlite3 = require('/opt/hkvm/app/node_modules/sqlite3');
+const db = new sqlite3.Database(process.env.DB_FILE);
+db.get('SELECT password FROM users WHERE username = ?', ['admin'], (err,row) => {
+  process.stdout.write(err || !row ? 'NO' : (bcrypt.compareSync(process.env.DEFAULT_PASSWORD, row.password) ? 'YES' : 'NO'));
+  db.close();
+});
+NODE
+    )"
 
-    if ! kill -0 "${HKVM_PID}" >/dev/null 2>&1; then
-        error 'HKVM process exited during startup.'
-        echo '---------------- HKVM STARTUP LOG ----------------'
-        tail -n 200 "${LOG_FILE}" || true
-        echo '---------------------------------------------------'
-        exit 1
+    local final_password="${generated}"
+    if [[ "${valid}" != 'YES' ]]; then
+        warn 'Generated admin password did not match the stored hash; repairing the account.'
+        final_password="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)"
+        [[ "${#final_password}" -ge 12 ]] || final_password="$(openssl rand -hex 12)"
+        local hash
+        hash="$(REPAIR_PASSWORD="${final_password}" "${NODE_BIN}" -e "console.log(require('${APP_DIR}/node_modules/bcryptjs').hashSync(process.env.REPAIR_PASSWORD, 10))")"
+        DB_FILE="${db_file}" REPAIRED_HASH="${hash}" "${NODE_BIN}" <<'NODE'
+const sqlite3 = require('/opt/hkvm/app/node_modules/sqlite3');
+const db = new sqlite3.Database(process.env.DB_FILE);
+db.run('UPDATE users SET password = ?, role = ?, is_active = 1 WHERE username = ?', [process.env.REPAIRED_HASH, 'admin', 'admin'], function(err) {
+  if (err || this.changes !== 1) process.exitCode = 1;
+  db.close();
+});
+NODE
+        ok 'Admin password repaired and verified.'
+    else
+        ok 'Generated admin password verified against the database.'
     fi
 
-    ok "HKVM process is running (PID ${HKVM_PID})."
-    RUN_MODE='STANDALONE'
-fi
+    cat > "${CREDENTIALS_FILE}" <<EOF
+VNM/HKVM Panel
+Username: admin
+Password: ${final_password}
+EOF
+    chmod 600 "${CREDENTIALS_FILE}"
+}
 
-line
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
-info "Checking TCP port ${PANEL_PORT}..."
-PANEL_STATUS='OFFLINE'
-
-for _ in {1..20}; do
-    if ss -ltn 2>/dev/null | grep -Eq ":${PANEL_PORT}([[:space:]]|$)"; then
-        PANEL_STATUS='ONLINE'
-        break
+access_url(){
+    if [[ -n "${CODESPACE_NAME:-}" && -n "${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-}" ]]; then
+        printf 'https://%s-%s.%s' "${CODESPACE_NAME}" "${PORT}" "${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}"
+    else
+        printf 'http://%s:%s' "$(hostname -I 2>/dev/null | awk '{print $1}' || echo YOUR_SERVER_IP)" "${PORT}"
     fi
-    sleep 1
-done
+}
 
-if [[ "${PANEL_STATUS}" == 'ONLINE' ]]; then
-    ok "Port ${PANEL_PORT} is listening."
-else
-    warn "Port ${PANEL_PORT} is not listening yet."
-fi
-
-HTTP_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:${PANEL_PORT}/login" 2>/dev/null || true)"
-
-if [[ "${HTTP_STATUS}" =~ ^[0-9]{3}$ && "${HTTP_STATUS}" != '000' ]]; then
-    ok "HTTP login page responded with ${HTTP_STATUS}."
-else
-    warn 'HTTP login health check did not return a normal response.'
-fi
-
-# ============================================================
-# PUBLIC IP
-# ============================================================
-
-PUBLIC_IP="$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
-if [[ -z "${PUBLIC_IP}" ]]; then
-    PUBLIC_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-fi
-[[ -n "${PUBLIC_IP}" ]] || PUBLIC_IP='YOUR_SERVER_IP'
-
-# ============================================================
-# FINAL SCREEN
-# ============================================================
-
-clear 2>/dev/null || true
-echo -e "${GREEN}"
-cat <<EOF
+final_screen(){
+    local url
+    url="$(access_url)"
+    clear 2>/dev/null || true
+    printf '%b\n' "${GREEN}"
+    cat <<EOF
 
 ╔════════════════════════════════════════════════════════════╗
 ║                    HKVM PANEL V3                           ║
-║                  INSTALLATION COMPLETE                    ║
+║              INSTALLATION COMPLETE                        ║
 ╚════════════════════════════════════════════════════════════╝
 
-  PANEL STATUS        : ${PANEL_STATUS}
-  HTTP LOGIN          : ${HTTP_STATUS}
-  LICENSE             : DISABLED
-  PANEL URL           : http://${PUBLIC_IP}:${PANEL_PORT}
+  STATUS              : ONLINE
+  LICENSE STATUS      : DISABLED
+
+  PANEL URL           : ${url}
 
   INSTALL DIRECTORY   : ${INSTALL_DIR}
   APPLICATION         : ${APP_DIR}
+  ENTRYPOINT          : ${APP_JS}
   DATA DIRECTORY      : ${DATA_DIR}
   CONFIGURATION       : ${ENV_FILE}
-  LOG FILE            : ${LOG_FILE}
-  RUN MODE            : ${RUN_MODE}
+
+  SERVICE             : ${SERVICE_NAME}
+  PROCESS             : RUNNING
+  MODE                : $([[ "${HAS_SYSTEMD}" == 'true' ]] && echo SYSTEMD || echo STANDALONE)
+  NODE BINARY         : ${NODE_BIN}
+  LOG FILE            : ${LOG_DIR}/hkvm.log
 
 ──────────────────────────────────────────────────────────────
 
-  COMMANDS
+  ADMIN CREDENTIALS
 
-  systemd VPS:
-    systemctl start ${SERVICE_NAME}
-    systemctl stop ${SERVICE_NAME}
-    systemctl restart ${SERVICE_NAME}
-    systemctl status ${SERVICE_NAME}
-    journalctl -u ${SERVICE_NAME} -f
+    Username          : admin
+    Credentials file  : ${CREDENTIALS_FILE}
 
-  Standalone/Codespaces:
-    cat ${PID_FILE}
-    tail -f ${LOG_FILE}
+    View with:
+      cat ${CREDENTIALS_FILE}
 
 ──────────────────────────────────────────────────────────────
 
-  LICENSE MODE
+  SERVICE COMMANDS
 
-    disabled
+    Start:
+      systemctl start ${SERVICE_NAME}
 
-  No license key is requested or required by this installer.
+    Stop:
+      systemctl stop ${SERVICE_NAME}
 
-──────────────────────────────────────────────────────────────
+    Restart:
+      systemctl restart ${SERVICE_NAME}
 
-  SOURCE REPOSITORY
+    Status:
+      systemctl status ${SERVICE_NAME}
 
-    ${REPO_URL}
+    Logs:
+      journalctl -u ${SERVICE_NAME} -f
 
-  SOURCE ZIP
-
-    ${ZIP_NAME}
+  Standalone log:
+      tail -f ${LOG_DIR}/hkvm.log
 
 ╚════════════════════════════════════════════════════════════╝
+
 EOF
+    printf '%b\n' "${NC}"
+    if [[ "${HAS_SYSTEMD}" != 'true' ]]; then
+        warn 'Standalone mode does not survive Codespace/container shutdowns.'
+    fi
+    ok 'HKVM installation finished successfully.'
+}
 
-echo -e "${NC}"
+main(){
+    print_logo
+    check_os
+    install_packages
+    detect_node
+    stop_existing
+    prepare_storage
+    download_and_extract
+    install_npm
+    write_env
+    patch_login_csrf
+    create_service
+    start_app
+    health_check
+    verify_admin
+    final_screen
+}
 
-if [[ "${PANEL_STATUS}" == 'ONLINE' ]]; then
-    ok "HKVM Panel is running on port ${PANEL_PORT}."
-else
-    warn "HKVM is installed but port ${PANEL_PORT} is offline."
-    warn "Check: tail -n 200 ${LOG_FILE}"
-fi
-
-line
-echo -e "${CYAN}HKVM installation finished.${NC}"
+main "$@"
