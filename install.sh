@@ -2,18 +2,12 @@
 
 # ============================================================
 # HKVM PANEL V3 — ULTRA INSTALLER
-# GitHub repository -> ZIP -> extract -> configure -> systemd
+# Works on normal systemd VPS AND container/cloud-shell systems
 # ============================================================
 
 set -Eeuo pipefail
 
-RED='\e[1;31m'
-GREEN='\e[1;32m'
-YELLOW='\e[1;33m'
-CYAN='\e[1;36m'
-MAGENTA='\e[1;35m'
-WHITE='\e[1;37m'
-NC='\e[0m'
+RED='\e[1;31m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; CYAN='\e[1;36m'; MAGENTA='\e[1;35m'; NC='\e[0m'
 
 APP_NAME="HKVM"
 SERVICE_NAME="hkvm"
@@ -31,13 +25,13 @@ PANEL_PORT="8080"
 NODE_MAJOR_REQUIRED="20"
 TMP_DIR=""
 
-line() { echo -e "${MAGENTA}============================================================${NC}"; }
-info() { echo -e "${CYAN}[INFO]${NC} $*"; }
-ok() { echo -e "${GREEN}[OK]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARNING]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
-die() { error "$*"; exit 1; }
-cleanup() { [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -rf "${TMP_DIR}" || true; }
+line(){ echo -e "${MAGENTA}============================================================${NC}"; }
+info(){ echo -e "${CYAN}[INFO]${NC} $*"; }
+ok(){ echo -e "${GREEN}[OK]${NC} $*"; }
+warn(){ echo -e "${YELLOW}[WARNING]${NC} $*"; }
+error(){ echo -e "${RED}[ERROR]${NC} $*"; }
+die(){ error "$*"; exit 1; }
+cleanup(){ [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]] && rm -rf "${TMP_DIR}" || true; }
 trap cleanup EXIT
 
 clear 2>/dev/null || true
@@ -69,13 +63,17 @@ info "Kernel           : $(uname -r)"
 
 if [[ "${ID:-}" != "ubuntu" && "${ID:-}" != "debian" ]]; then
     warn "This installer is designed for Debian/Ubuntu."
-    read -r -p "Continue anyway? [y/N]: " answer
-    [[ "${answer}" =~ ^[Yy]$ ]] || die "Installation cancelled."
 fi
 
-command -v systemctl >/dev/null 2>&1 || die "systemd is required."
-[[ -d /run/systemd/system ]] || die "This installer must run on a systemd-based server."
-ok "systemd detected."
+# Cloud Shell and containers usually do not run systemd as PID 1.
+SYSTEMD_MODE=false
+if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] && [[ "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then
+    SYSTEMD_MODE=true
+    ok "systemd detected — service mode enabled."
+else
+    warn "systemd not detected — standalone/background mode enabled."
+    info "This is expected in Google Cloud Shell and many containers."
+fi
 line
 
 export DEBIAN_FRONTEND=noninteractive
@@ -90,9 +88,7 @@ if command -v node >/dev/null 2>&1; then
     NODE_VERSION="$(node -v | sed 's/^v//')"
     NODE_MAJOR="${NODE_VERSION%%.*}"
     info "Detected Node.js: v${NODE_VERSION}"
-    if [[ "${NODE_MAJOR}" =~ ^[0-9]+$ ]] && (( NODE_MAJOR >= NODE_MAJOR_REQUIRED )); then
-        NODE_OK=true
-    fi
+    if [[ "${NODE_MAJOR}" =~ ^[0-9]+$ ]] && (( NODE_MAJOR >= NODE_MAJOR_REQUIRED )); then NODE_OK=true; fi
 fi
 
 if [[ "${NODE_OK}" != true ]]; then
@@ -106,25 +102,23 @@ command -v npm >/dev/null 2>&1 || die "npm installation failed."
 ok "Node.js: $(node -v) | npm: $(npm -v)"
 line
 
-# Directories
 mkdir -p "${INSTALL_DIR}" "${DATA_DIR}" "${LOG_DIR}" "${BACKUP_DIR}" "${ETC_DIR}"
 chmod 755 "${INSTALL_DIR}" "${DATA_DIR}" "${LOG_DIR}"
 chmod 700 "${BACKUP_DIR}" "${ETC_DIR}"
 ok "HKVM directories prepared."
 
-# Preserve existing configuration
 if [[ -f "${ENV_FILE}" ]]; then
     BACKUP_FILE="${BACKUP_DIR}/hkvm.env.$(date +%Y%m%d-%H%M%S).bak"
     cp -a "${ENV_FILE}" "${BACKUP_FILE}"
     ok "Existing configuration backed up."
 fi
 
-if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
+if [[ "${SYSTEMD_MODE}" == true ]] && systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\.service"; then
     info "Stopping existing HKVM service..."
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
 fi
 
-# Clone repository
+# Download repository
 TMP_DIR="$(mktemp -d -t hkvm-installer-XXXXXX)"
 REPO_DIR="${TMP_DIR}/repo"
 EXTRACT_DIR="${TMP_DIR}/extracted"
@@ -136,7 +130,6 @@ ok "Repository cloned."
 
 ZIP_FILE="${REPO_DIR}/${ZIP_NAME}"
 [[ -f "${ZIP_FILE}" ]] || die "${ZIP_NAME} was not found in the repository."
-
 ZIP_SIZE="$(du -m "${ZIP_FILE}" | awk '{print $1}')"
 info "Found ${ZIP_NAME} (${ZIP_SIZE} MB)."
 [[ "${ZIP_SIZE}" -ge 1 ]] || die "ZIP file is empty or invalid."
@@ -147,7 +140,6 @@ ok "ZIP extracted."
 
 PACKAGE_JSON="$(find "${EXTRACT_DIR}" -type f -name package.json -print -quit || true)"
 [[ -n "${PACKAGE_JSON}" ]] || die "No package.json found inside ${ZIP_NAME}."
-
 SOURCE_DIR="$(dirname "${PACKAGE_JSON}")"
 info "Detected application directory: ${SOURCE_DIR}"
 
@@ -159,7 +151,7 @@ ok "Application installed into ${APP_DIR}."
 cd "${APP_DIR}"
 info "Installing Node.js dependencies..."
 if [[ -f package-lock.json ]]; then
-    npm ci --omit=dev
+    npm ci --omit=dev || { warn "npm ci failed; retrying with npm install..."; npm install --omit=dev; }
 else
     npm install --omit=dev
 fi
@@ -169,7 +161,6 @@ line
 # License configuration
 LICENSE_MODE="required"
 LICENSE_KEY=""
-
 if [[ -f "${ENV_FILE}" ]]; then
     OLD_MODE="$(grep '^LICENSE_MODE=' "${ENV_FILE}" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
     OLD_KEY="$(grep '^LICENSE_KEY=' "${ENV_FILE}" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
@@ -188,11 +179,7 @@ fi
 if [[ -z "${LICENSE_KEY}" ]]; then
     warn "No license key supplied."
     read -r -p "Use LICENSE_MODE=disabled for development? [y/N]: " disable_license
-    if [[ "${disable_license}" =~ ^[Yy]$ ]]; then
-        LICENSE_MODE="disabled"
-    else
-        die "A license key is required for production installation."
-    fi
+    if [[ "${disable_license}" =~ ^[Yy]$ ]]; then LICENSE_MODE="disabled"; else die "A license key is required for production installation."; fi
 else
     LICENSE_MODE="required"
     ok "License configuration received."
@@ -213,7 +200,6 @@ HKVM_INSTALL_DIR=${INSTALL_DIR}
 HKVM_APP_DIR=${APP_DIR}
 HKVM_LOG_DIR=${LOG_DIR}
 EOF
-
 chmod 600 "${ENV_FILE}"
 chown root:root "${ENV_FILE}"
 rm -f "${APP_DIR}/.env"
@@ -221,19 +207,14 @@ ln -s "${ENV_FILE}" "${APP_DIR}/.env"
 ok "Secure HKVM configuration created."
 line
 
-# Detect start command
 START_SCRIPT="$(node -e 'const p=require("./package.json"); process.stdout.write((p.scripts&&p.scripts.start)||"");')"
-
 if [[ -n "${START_SCRIPT}" ]]; then
     EXEC_START="$(command -v npm) start"
     info "Using npm start."
 else
     ENTRY_FILE=""
     for candidate in app.js server.js index.js main.js; do
-        if [[ -f "${APP_DIR}/${candidate}" ]]; then
-            ENTRY_FILE="${APP_DIR}/${candidate}"
-            break
-        fi
+        if [[ -f "${APP_DIR}/${candidate}" ]]; then ENTRY_FILE="${APP_DIR}/${candidate}"; break; fi
     done
     [[ -n "${ENTRY_FILE}" ]] || die "Unable to detect application entrypoint."
     EXEC_START="$(command -v node) ${ENTRY_FILE}"
@@ -241,10 +222,11 @@ else
 fi
 
 LOG_FILE="${LOG_DIR}/hkvm.log"
+PID_FILE="${INSTALL_DIR}/hkvm.pid"
 touch "${LOG_FILE}"
 chmod 640 "${LOG_FILE}"
 
-# Firewall
+# Firewall (best effort; Cloud Shell may not expose a host firewall)
 if command -v ufw >/dev/null 2>&1; then
     ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
 elif command -v firewall-cmd >/dev/null 2>&1; then
@@ -252,9 +234,9 @@ elif command -v firewall-cmd >/dev/null 2>&1; then
     firewall-cmd --reload >/dev/null 2>&1 || true
 fi
 
-# Systemd
-info "Creating systemd service..."
-cat > "${SERVICE_FILE}" <<EOF
+if [[ "${SYSTEMD_MODE}" == true ]]; then
+    info "Creating systemd service..."
+    cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=HKVM Panel V3
 After=network-online.target
@@ -276,29 +258,50 @@ StandardError=append:${LOG_FILE}
 [Install]
 WantedBy=multi-user.target
 EOF
-
-chmod 644 "${SERVICE_FILE}"
-systemctl daemon-reload
-systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1
-systemctl restart "${SERVICE_NAME}"
-sleep 5
-
-if systemctl is-active --quiet "${SERVICE_NAME}"; then
-    ok "HKVM service is ONLINE."
+    chmod 644 "${SERVICE_FILE}"
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1
+    systemctl restart "${SERVICE_NAME}"
+    sleep 5
+    if systemctl is-active --quiet "${SERVICE_NAME}"; then
+        ok "HKVM service is ONLINE."
+        RUN_MODE="systemd"
+    else
+        error "HKVM service failed to start."
+        systemctl status "${SERVICE_NAME}" --no-pager --full || true
+        journalctl -u "${SERVICE_NAME}" -n 80 --no-pager || true
+        exit 1
+    fi
 else
-    error "HKVM service failed to start."
-    systemctl status "${SERVICE_NAME}" --no-pager --full || true
-    journalctl -u "${SERVICE_NAME}" -n 80 --no-pager || true
-    exit 1
+    # Cloud Shell/container mode: no systemd. Run the panel detached.
+    if [[ -f "${PID_FILE}" ]]; then
+        OLD_PID="$(cat "${PID_FILE}" 2>/dev/null || true)"
+        if [[ "${OLD_PID}" =~ ^[0-9]+$ ]] && kill -0 "${OLD_PID}" 2>/dev/null; then
+            info "Stopping existing standalone HKVM process (${OLD_PID})..."
+            kill "${OLD_PID}" 2>/dev/null || true
+            sleep 2
+        fi
+    fi
+    info "Starting HKVM in standalone/background mode..."
+    cd "${APP_DIR}"
+    nohup bash -c "exec ${EXEC_START}" >>"${LOG_FILE}" 2>&1 &
+    HKVM_PID=$!
+    echo "${HKVM_PID}" > "${PID_FILE}"
+    chmod 600 "${PID_FILE}"
+    sleep 5
+    if kill -0 "${HKVM_PID}" 2>/dev/null; then
+        ok "HKVM standalone process is ONLINE (PID ${HKVM_PID})."
+        RUN_MODE="standalone"
+    else
+        error "HKVM process exited during startup."
+        tail -n 100 "${LOG_FILE}" || true
+        exit 1
+    fi
 fi
 
-# Port check
 PANEL_STATUS="OFFLINE"
 for _ in {1..15}; do
-    if ss -ltn 2>/dev/null | grep -q ":${PANEL_PORT}"; then
-        PANEL_STATUS="ONLINE"
-        break
-    fi
+    if ss -ltn 2>/dev/null | grep -q ":${PANEL_PORT}"; then PANEL_STATUS="ONLINE"; break; fi
     sleep 1
 done
 
@@ -316,47 +319,48 @@ cat <<EOF
 ╚════════════════════════════════════════════════════════════╝
 
   STATUS              : ${PANEL_STATUS}
+  RUN MODE            : ${RUN_MODE}
   LICENSE STATUS      : ${LICENSE_MODE^^}
   PANEL URL           : http://${PUBLIC_IP}:${PANEL_PORT}
   INSTALL DIRECTORY   : ${INSTALL_DIR}
   APPLICATION         : ${APP_DIR}
-  SERVICE             : ${SERVICE_NAME}
   LOG FILE            : ${LOG_FILE}
 
 ──────────────────────────────────────────────────────────────
 
+EOF
+
+if [[ "${RUN_MODE}" == "systemd" ]]; then
+cat <<EOF
   SERVICE COMMANDS
 
-  Start:
-    systemctl start ${SERVICE_NAME}
+  Start:    systemctl start ${SERVICE_NAME}
+  Stop:     systemctl stop ${SERVICE_NAME}
+  Restart:  systemctl restart ${SERVICE_NAME}
+  Status:   systemctl status ${SERVICE_NAME}
+  Logs:     journalctl -u ${SERVICE_NAME} -f
 
-  Stop:
-    systemctl stop ${SERVICE_NAME}
+EOF
+else
+cat <<EOF
+  STANDALONE COMMANDS
 
-  Restart:
-    systemctl restart ${SERVICE_NAME}
+  PID:      ${PID_FILE}
+  Stop:     kill \$(cat ${PID_FILE})
+  Restart:  kill \$(cat ${PID_FILE}) && cd ${APP_DIR} && nohup bash -c 'exec ${EXEC_START}' >>${LOG_FILE} 2>&1 &
+  Logs:     tail -f ${LOG_FILE}
 
-  Status:
-    systemctl status ${SERVICE_NAME}
+  NOTE: Cloud Shell is temporary. For permanent hosting, use a VPS
+        with systemd and run this installer there.
 
-──────────────────────────────────────────────────────────────
+EOF
+fi
 
-  LIVE LOGS
-
-    journalctl -u ${SERVICE_NAME} -f
-
-  OR
-
-    tail -f ${LOG_FILE}
-
-──────────────────────────────────────────────────────────────
-
+cat <<EOF
   SOURCE REPOSITORY
-
     ${REPO_URL}
 
   ZIP SOURCE
-
     ${ZIP_NAME}
 
   NOTE: The actual license key is never displayed.
@@ -370,8 +374,7 @@ if [[ "${PANEL_STATUS}" == "ONLINE" ]]; then
     ok "HKVM Panel is running on port ${PANEL_PORT}."
 else
     warn "HKVM installed but port ${PANEL_PORT} is not listening."
-    warn "Check: journalctl -u ${SERVICE_NAME} -n 100 --no-pager"
+    warn "Check: tail -n 100 ${LOG_FILE}"
 fi
-
 line
 echo -e "${CYAN}HKVM installation finished.${NC}"
