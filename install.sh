@@ -10,6 +10,7 @@ set -Eeuo pipefail
 
 readonly CORE_URL='https://raw.githubusercontent.com/stripathi02123-tech/Vnm-panel/main/install-v5.sh'
 readonly TMP="/tmp/vnm-panel-install-v5-$$.sh"
+readonly CORE_TMP="/tmp/vnm-panel-install-v5-core-$$.sh"
 
 RED='\033[1;31m'
 GREEN='\033[1;32m'
@@ -23,7 +24,7 @@ warn(){ printf '%b\n' "${YELLOW}[VNM PANEL][WARNING]${NC} $*"; }
 die(){ printf '%b\n' "${RED}[VNM PANEL][ERROR]${NC} %s\n" "$*" >&2; exit 1; }
 
 cleanup(){
-    rm -f "${TMP}" || true
+    rm -f "${TMP}" "${CORE_TMP}" || true
 }
 trap cleanup EXIT
 
@@ -123,9 +124,21 @@ install_vnm_panel_prerequisites
 command -v curl >/dev/null 2>&1 || die 'curl is required after prerequisite installation.'
 
 info 'Downloading the maintained VNM Panel core installer...'
-curl -fsSL "${CORE_URL}" -o "${TMP}"
-[[ -s "${TMP}" ]] || die 'Downloaded VNM Panel core installer is empty.'
+curl -fsSL "${CORE_URL}" -o "${CORE_TMP}"
+[[ -s "${CORE_TMP}" ]] || die 'Downloaded VNM Panel core installer is empty.'
+chmod 700 "${CORE_TMP}"
+
+# Keep the core implementation intact while normalizing visible uppercase
+# branding. Lowercase compatibility names (/opt/hkvm, hkvm.service, etc.) are
+# deliberately not changed.
+sed \
+    -e 's/VNM\/HKVM/VNM PANEL/g' \
+    -e 's/HKVM PANEL/VNM PANEL/g' \
+    -e 's/HKVM/VNM PANEL/g' \
+    "${CORE_TMP}" > "${TMP}"
 chmod 700 "${TMP}"
 
 info 'Starting VNM Panel core installation...'
-exec "${TMP}" "$@"
+"${TMP}" "$@"
+rc=$?
+exit "${rc}"
