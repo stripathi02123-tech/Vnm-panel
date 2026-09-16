@@ -5,15 +5,7 @@ set -Eeuo pipefail
 # VNM PANEL — DIRECT INSTALLER BOOTSTRAP
 #
 # The existing direct-install flow is preserved. This wrapper adds the
-# virtualization/bootstrap phase before the existing flow:
-#   1. Install cloud-image-utils + genisoimage
-#   2. Install qemu-system-x86 + qemu-utils + ovmf
-#   3. Verify QEMU, /dev/kvm and cloud-localds/image tooling
-#   4. Run a bounded KVM functional test when /dev/kvm is available
-#   5. Continue into the existing VNM Panel direct installer
-#
-# Runtime paths/service names remain compatible with the existing installation
-# (/opt/hkvm and hkvm.service). Branding shown by the installer is VNM Panel.
+# virtualization/bootstrap phase before the existing flow.
 # ============================================================================
 
 readonly VNM_PANEL_LEGACY_COMMIT='dd9db741e4fac2394a514bae2c0d4ef933e00540'
@@ -55,15 +47,11 @@ install_vnm_panel_prerequisites(){
     source /etc/os-release
 
     case "${ID:-}" in
-        ubuntu|debian)
-            ;;
-        *)
-            die "VNM Panel currently requires Debian or Ubuntu for automatic package installation (detected: ${ID:-unknown})."
-            ;;
+        ubuntu|debian) ;;
+        *) die "VNM Panel currently requires Debian or Ubuntu for automatic package installation (detected: ${ID:-unknown})." ;;
     esac
 
     command -v apt-get >/dev/null 2>&1 || die 'apt-get is required on Debian/Ubuntu.'
-
     export DEBIAN_FRONTEND=noninteractive
 
     info 'VNM Panel prerequisite step 1/6: updating APT package lists...'
@@ -107,7 +95,7 @@ install_vnm_panel_prerequisites(){
         dmesg | grep -iE 'kvm|virtualiz' | tail -30 || true
     fi
 
-    if [[ -r /dev/kvm && -x "$(command -v qemu-system-x86_64)" ]]; then
+    if [[ -r /dev/kvm && -x "$(command -v qemu-system-x86_64)" ]] && command -v timeout >/dev/null 2>&1; then
         info 'Running bounded QEMU/KVM functional test...'
         set +e
         timeout 6s qemu-system-x86_64 \
@@ -120,8 +108,6 @@ install_vnm_panel_prerequisites(){
         local test_rc=$?
         set -e
 
-        # -S intentionally keeps QEMU stopped, so timeout (124) is a valid
-        # result: QEMU successfully entered the KVM/Q35 startup path.
         if [[ "${test_rc}" -eq 0 || "${test_rc}" -eq 124 ]]; then
             ok 'QEMU/KVM functional test completed successfully.'
         else
@@ -130,7 +116,7 @@ install_vnm_panel_prerequisites(){
         fi
         rm -f /tmp/vnm-panel-qemu-test.log || true
     else
-        warn 'Skipping QEMU/KVM functional test because /dev/kvm is unavailable.'
+        warn 'Skipping QEMU/KVM functional test because /dev/kvm or timeout is unavailable.'
     fi
 
     export VNM_PANEL_PREREQS_DONE='true'
@@ -139,10 +125,6 @@ install_vnm_panel_prerequisites(){
 
 install_vnm_panel_prerequisites
 
-# ============================================================================
-# DOWNLOAD THE EXISTING DIRECT INSTALLER
-# ============================================================================
-
 command -v curl >/dev/null 2>&1 || die 'curl is required after prerequisite installation.'
 
 info 'Downloading the existing VNM Panel direct-install flow...'
@@ -150,16 +132,20 @@ curl -fsSL "${VNM_PANEL_LEGACY_URL}" -o "${VNM_PANEL_LEGACY_TMP}"
 [[ -s "${VNM_PANEL_LEGACY_TMP}" ]] || die 'Existing direct installer could not be downloaded.'
 chmod 700 "${VNM_PANEL_LEGACY_TMP}"
 
-# Keep the existing implementation/flow while removing old uppercase HKVM
-# branding from what the user sees. Lowercase compatibility names such as
-# /opt/hkvm and hkvm.service are deliberately untouched.
+# Keep the existing implementation/flow while changing only visible branding.
+# Quote PANEL_NAME because it is sourced as a shell environment file.
 sed \
+    -e 's/^PANEL_NAME=HKVM$/PANEL_NAME="VNM Panel"/' \
     -e 's/VNM\/HKVM/VNM PANEL/g' \
     -e 's/HKVM PANEL/VNM PANEL/g' \
     -e 's/HKVM/VNM PANEL/g' \
     "${VNM_PANEL_LEGACY_TMP}" > "${VNM_PANEL_TMP}"
 
 chmod 700 "${VNM_PANEL_TMP}"
+
+# Safety repair for any branded environment assignment produced by the
+# generic replacements above.
+sed -i -E 's/^PANEL_NAME=VNM PANEL$/PANEL_NAME="VNM Panel"/' "${VNM_PANEL_TMP}"
 
 info 'Starting the existing VNM Panel direct installer...'
 "${VNM_PANEL_TMP}" "$@"
