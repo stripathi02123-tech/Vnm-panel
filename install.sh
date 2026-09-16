@@ -12,6 +12,7 @@ set -Eeuo pipefail
 readonly CORE_URL='https://raw.githubusercontent.com/stripathi02123-tech/Vnm-panel/main/install-v5.sh'
 readonly TMP="/tmp/vnm-panel-install-v5-$$.sh"
 readonly CORE_TMP="/tmp/vnm-panel-install-v5-core-$$.sh"
+readonly CREDENTIAL_FILE='/opt/hkvm/admin-credentials.txt'
 
 RED='\033[1;31m'
 GREEN='\033[1;32m'
@@ -109,7 +110,6 @@ curl -fsSL "${CORE_FETCH_URL}" -o "${CORE_TMP}"
 [[ -s "${CORE_TMP}" ]] || die 'Downloaded VNM Panel core installer is empty.'
 chmod 700 "${CORE_TMP}"
 
-# Safety check: the core must contain the shell-safe PANEL_NAME assignment.
 grep -Fq 'PANEL_NAME="VNM Panel"' "${CORE_TMP}" || die 'Downloaded core installer failed VNM Panel environment safety validation.'
 
 # Never perform branding substitutions here. In particular, never replace
@@ -120,4 +120,25 @@ chmod 700 "${TMP}"
 info 'Starting VNM Panel core installation...'
 "${TMP}" "$@"
 rc=$?
+
+# ============================================================================
+# ADMIN CREDENTIAL DISPLAY / RECOVERY
+# ============================================================================
+
+if [[ "${rc}" -eq 0 ]]; then
+    if [[ -f "${CREDENTIAL_FILE}" ]]; then
+        printf '\n'
+        printf '%b\n' "${GREEN}============================================================${NC}"
+        printf '%b\n' "${CYAN}VNM PANEL ADMIN CREDENTIALS${NC}"
+        printf '%b\n' "${GREEN}============================================================${NC}"
+        cat "${CREDENTIAL_FILE}"
+        printf '\n'
+        info "Credentials file: ${CREDENTIAL_FILE}"
+        info "To view them again: sudo cat ${CREDENTIAL_FILE}"
+    else
+        warn "Admin credential file was not created by the core installer: ${CREDENTIAL_FILE}"
+        warn 'The panel may already have existing credentials. No existing password was overwritten by this wrapper.'
+    fi
+fi
+
 exit "${rc}"
