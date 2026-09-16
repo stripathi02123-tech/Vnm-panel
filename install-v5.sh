@@ -1,18 +1,12 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# HKVM PANEL V3 — FRESH ULTRA INSTALLER V5
+# VNM PANEL V3 — FRESH ULTRA INSTALLER V5
 # GitHub ZIP -> extract -> install -> configure -> run
 #
 # Development build:
 #   LICENSE_MODE=disabled
 #   No license prompt
-#
-# IMPORTANT:
-#   The archive's package.json may contain an unrelated npm start
-#   script. This installer deliberately prefers app.js for the
-#   VNM/HKVM panel and launches the exact Node binary detected
-#   during installation.
 # ============================================================
 
 set -Eeuo pipefail
@@ -48,10 +42,10 @@ NPM_BIN=''
 MAIN_JS=''
 
 line(){ echo -e "${MAGENTA}============================================================${NC}"; }
-info(){ echo -e "${CYAN}[INFO]${NC} $*"; }
-ok(){ echo -e "${GREEN}[OK]${NC} $*"; }
-warn(){ echo -e "${YELLOW}[WARNING]${NC} $*"; }
-error(){ echo -e "${RED}[ERROR]${NC} $*"; }
+info(){ echo -e "${CYAN}[VNM PANEL][INFO]${NC} $*"; }
+ok(){ echo -e "${GREEN}[VNM PANEL][OK]${NC} $*"; }
+warn(){ echo -e "${YELLOW}[VNM PANEL][WARNING]${NC} $*"; }
+error(){ echo -e "${RED}[VNM PANEL][ERROR]${NC} $*"; }
 die(){ error "$*"; exit 1; }
 
 cleanup(){
@@ -65,9 +59,9 @@ on_error(){
   local rc=$?
   error "Installer failed at line ${BASH_LINENO[0]} (exit ${rc})."
   if [[ -f "${LOG_FILE}" ]]; then
-    echo '---------------- HKVM LOG ----------------'
+    echo '---------------- VNM PANEL LOG ----------------'
     tail -n 160 "${LOG_FILE}" || true
-    echo '-------------------------------------------'
+    echo '-----------------------------------------------'
   fi
   exit "${rc}"
 }
@@ -84,7 +78,7 @@ cat <<'EOF'
 ██║  ██╗██║  ██╗ ╚████╔╝ ██║ ╚═╝ ██║
 ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝     ╚═╝
 
-             HKVM PANEL V3
+             VNM PANEL V3
           FRESH ULTRA INSTALLER V5
 EOF
 echo -e "${NC}"
@@ -215,7 +209,7 @@ if command -v lsof >/dev/null 2>&1; then
     CMD="$(ps -p "${LPID}" -o args= 2>/dev/null || true)"
     CWD="$(readlink -f "/proc/${LPID}/cwd" 2>/dev/null || true)"
     if [[ "${CWD}" == "${APP_DIR}" ]] || [[ "${CMD}" == *"${APP_DIR}/app.js"* ]]; then
-      warn "Stopping old HKVM listener PID ${LPID} on port ${PANEL_PORT}."
+      warn "Stopping old VNM Panel listener PID ${LPID} on port ${PANEL_PORT}."
       kill "${LPID}" >/dev/null 2>&1 || true
       for _ in {1..20}; do
         kill -0 "${LPID}" >/dev/null 2>&1 || break
@@ -235,12 +229,12 @@ line
 # GITHUB -> ZIP
 # ============================================================
 
-TMP_DIR="$(mktemp -d -t hkvm-installer-XXXXXX)"
+TMP_DIR="$(mktemp -d -t vnm-panel-installer-XXXXXX)"
 REPO_DIR="${TMP_DIR}/repo"
 EXTRACT_DIR="${TMP_DIR}/extract"
 mkdir -p "${EXTRACT_DIR}"
 
-info 'Cloning HKVM repository...'
+info 'Cloning VNM Panel repository...'
 git clone --depth 1 --single-branch "${REPO_URL}" "${REPO_DIR}"
 ok 'Repository cloned.'
 
@@ -263,10 +257,8 @@ line
 # APPLICATION ROOT
 # ============================================================
 
-info 'Detecting real HKVM application root...'
+info 'Detecting real VNM Panel application root...'
 
-# Explicitly prefer an app.js outside node_modules because the archive's
-# package.json may describe a different/unrelated project.
 mapfile -t APP_FILES < <(
   find "${EXTRACT_DIR}" -type f -name app.js \
     -not -path '*/node_modules/*' -not -path '*/.git/*' \
@@ -278,7 +270,6 @@ if [[ "${#APP_FILES[@]}" -gt 0 ]]; then
   SOURCE_APP_DIR="$(dirname "${APP_FILES[0]}")"
 fi
 
-# Fallback only when app.js is absent.
 if [[ -z "${SOURCE_APP_DIR}" ]]; then
   mapfile -t PACKAGE_FILES < <(
     find "${EXTRACT_DIR}" -type f -name package.json \
@@ -294,7 +285,7 @@ if [[ -z "${SOURCE_APP_DIR}" ]]; then
   done
 fi
 
-[[ -n "${SOURCE_APP_DIR}" ]] || die 'Unable to locate the real HKVM application root.'
+[[ -n "${SOURCE_APP_DIR}" ]] || die 'Unable to locate the real VNM Panel application root.'
 [[ "${SOURCE_APP_DIR}" != *'/node_modules/'* ]] || die 'Safety failure: application root is inside node_modules.'
 
 info "Application root: ${SOURCE_APP_DIR}"
@@ -303,7 +294,7 @@ rm -rf "${APP_DIR}"
 mkdir -p "${APP_DIR}"
 cp -a "${SOURCE_APP_DIR}/." "${APP_DIR}/"
 
-[[ -f "${APP_DIR}/app.js" ]] || die 'Expected HKVM app.js was not found after extraction.'
+[[ -f "${APP_DIR}/app.js" ]] || die 'Expected VNM Panel app.js was not found after extraction.'
 
 ok "Application installed into ${APP_DIR}."
 line
@@ -338,10 +329,11 @@ line
 SESSION_SECRET="$(openssl rand -hex 32)"
 [[ -n "${SESSION_SECRET}" ]] || die 'Failed to generate session secret.'
 
+# Generate a shell-safe env file. Values containing spaces MUST be quoted.
 cat > "${ENV_FILE}" <<EOF
 NODE_ENV=production
 PORT=${PANEL_PORT}
-PANEL_NAME=HKVM
+PANEL_NAME="VNM Panel"
 SESSION_SECRET=${SESSION_SECRET}
 LICENSE_MODE=disabled
 LICENSE_KEY=
@@ -354,6 +346,11 @@ EOF
 chmod 600 "${ENV_FILE}"
 chown root:root "${ENV_FILE}"
 ln -sfn "${ENV_FILE}" "${APP_DIR}/.env"
+
+# Validate the generated env before sourcing it later in standalone mode.
+if ! bash -n "${ENV_FILE}"; then
+  die "Generated VNM Panel environment file is invalid: ${ENV_FILE}"
+fi
 
 ok 'Configuration created.'
 ok 'License is DISABLED — no license key is required.'
@@ -384,9 +381,6 @@ import re, sys
 
 p = Path(sys.argv[1])
 s = p.read_text(encoding='utf-8')
-
-# Only patch an actual named csrfProtection function. Do not make broad,
-# unsafe changes to unrelated middleware.
 pattern = re.compile(r'function\s+csrfProtection\s*\(\s*req\s*,\s*res\s*,\s*next\s*\)\s*\{', re.S)
 m = pattern.search(s)
 
@@ -406,7 +400,6 @@ if m:
     if end is None:
         raise SystemExit('Could not safely parse csrfProtection')
 
-    old = s[m.start():end]
     new = '''function csrfProtection(req, res, next) {
   const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
   const requestPath = (req.originalUrl || req.url || req.path || '/').split('?')[0].replace(/\\/+$/, '') || '/';
@@ -447,14 +440,14 @@ elif command -v firewall-cmd >/dev/null 2>&1; then
 fi
 
 # ============================================================
-# SYSTEMD MODE
+# SYSTEMD / STANDALONE
 # ============================================================
 
 if [[ "${HAS_SYSTEMD}" == 'true' ]]; then
   info 'Creating systemd service...'
   cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=HKVM Panel V3
+Description=VNM Panel V3
 After=network-online.target
 Wants=network-online.target
 
@@ -484,41 +477,34 @@ EOF
   sleep 5
 
   if systemctl is-active --quiet "${SERVICE_NAME}"; then
-    ok 'HKVM service is ONLINE.'
+    ok 'VNM Panel service is ONLINE.'
   else
-    error 'HKVM service failed to start.'
+    error 'VNM Panel service failed to start.'
     systemctl status "${SERVICE_NAME}" --no-pager --full || true
     journalctl -u "${SERVICE_NAME}" -n 200 --no-pager || true
     exit 1
   fi
-
 else
-  # ==========================================================
-  # STANDALONE / CODESPACES MODE
-  # ==========================================================
-
-  info 'Starting HKVM in standalone/background mode...'
+  info 'Starting VNM Panel in standalone/background mode...'
   : > "${LOG_FILE}"
 
-  # Export config in THIS shell and execute the exact resolved Node binary.
-  # Do not spawn another login shell that can lose the Codespaces PATH.
   set -a
   source "${ENV_FILE}"
   set +a
 
   nohup "${NODE_BIN}" "${MAIN_JS}" >>"${LOG_FILE}" 2>&1 &
-  HKVM_PID=$!
-  echo "${HKVM_PID}" > "${PID_FILE}"
+  VNM_PANEL_PID=$!
+  echo "${VNM_PANEL_PID}" > "${PID_FILE}"
 
   sleep 5
 
-  if kill -0 "${HKVM_PID}" >/dev/null 2>&1; then
-    ok "HKVM process is running (PID ${HKVM_PID})."
+  if kill -0 "${VNM_PANEL_PID}" >/dev/null 2>&1; then
+    ok "VNM Panel process is running (PID ${VNM_PANEL_PID})."
   else
-    error 'HKVM process exited during startup.'
-    echo '---------------- HKVM STARTUP LOG ----------------'
+    error 'VNM Panel process exited during startup.'
+    echo '---------------- VNM PANEL STARTUP LOG ----------------'
     tail -n 240 "${LOG_FILE}" || true
-    echo '---------------------------------------------------'
+    echo '--------------------------------------------------------'
     exit 1
   fi
 fi
@@ -577,7 +563,7 @@ echo -e "${GREEN}"
 cat <<EOF
 
 ╔════════════════════════════════════════════════════════════╗
-║                    HKVM PANEL V3                           ║
+║                    VNM PANEL V3                            ║
 ║                  INSTALLATION COMPLETE                    ║
 ╚════════════════════════════════════════════════════════════╝
 
@@ -630,11 +616,11 @@ EOF
 echo -e "${NC}"
 
 if [[ "${PANEL_STATUS}" == 'ONLINE' ]]; then
-  ok "HKVM Panel is running on port ${PANEL_PORT}."
+  ok "VNM Panel is running on port ${PANEL_PORT}."
 else
-  warn "HKVM installed, but port ${PANEL_PORT} is not listening yet."
+  warn "VNM Panel installed, but port ${PANEL_PORT} is not listening yet."
   warn "Check: tail -n 240 ${LOG_FILE}"
 fi
 
 line
-echo -e "${CYAN}HKVM V5 installation finished.${NC}"
+echo -e "${CYAN}VNM Panel V5 installation finished.${NC}"
