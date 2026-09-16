@@ -135,6 +135,7 @@ sed \
     -e 's/VNM\/HKVM/VNM PANEL/g' \
     -e 's/HKVM PANEL/VNM PANEL/g' \
     -e 's/HKVM/VNM PANEL/g' \
+    -e 's/^PANEL_NAME=VNM PANEL$/PANEL_NAME="VNM Panel"/' \
     "${CORE_TMP}" > "${TMP}"
 chmod 700 "${TMP}"
 
