@@ -6,6 +6,9 @@ set -Eeuo pipefail
 #
 # The existing direct-install flow is preserved. This wrapper adds the
 # virtualization/bootstrap phase before the existing flow.
+#
+# IMPORTANT: Functional variable names and compatibility paths such as
+# HKVM_INSTALL_DIR, HKVM_APP_DIR, /opt/hkvm and hkvm.service are preserved.
 # ============================================================================
 
 readonly VNM_PANEL_LEGACY_COMMIT='dd9db741e4fac2394a514bae2c0d4ef933e00540'
@@ -87,7 +90,7 @@ install_vnm_panel_prerequisites(){
             warn '/dev/kvm exists but is not readable/writable by root as expected.'
         fi
     else
-        warn '/dev/kvm is not available. QEMU can still use software emulation, but hardware KVM acceleration will not be available.'
+        warn 'KVM is not available. QEMU can use software emulation.'
     fi
 
     info 'VNM Panel prerequisite step 6/6: checking kernel virtualization messages...'
@@ -132,20 +135,19 @@ curl -fsSL "${VNM_PANEL_LEGACY_URL}" -o "${VNM_PANEL_LEGACY_TMP}"
 [[ -s "${VNM_PANEL_LEGACY_TMP}" ]] || die 'Existing direct installer could not be downloaded.'
 chmod 700 "${VNM_PANEL_LEGACY_TMP}"
 
-# Keep the existing implementation/flow while changing only visible branding.
-# Quote PANEL_NAME because it is sourced as a shell environment file.
+# IMPORTANT: Do NOT globally replace HKVM -> VNM PANEL here.
+# HKVM_* variable names are part of the runtime configuration contract and
+# replacing them creates invalid shell assignments such as:
+#   VNM PANEL_INSTALL_DIR=/opt/hkvm
+# Only patch known human-facing labels and the PANEL_NAME assignment.
 sed \
     -e 's/^PANEL_NAME=HKVM$/PANEL_NAME="VNM Panel"/' \
-    -e 's/VNM\/HKVM/VNM PANEL/g' \
-    -e 's/HKVM PANEL/VNM PANEL/g' \
-    -e 's/HKVM/VNM PANEL/g' \
+    -e 's/HKVM PANEL V3/VNM PANEL V3/g' \
+    -e 's/HKVM V5/VNM PANEL V5/g' \
+    -e 's/HKVM Panel/VNM Panel/g' \
     "${VNM_PANEL_LEGACY_TMP}" > "${VNM_PANEL_TMP}"
 
 chmod 700 "${VNM_PANEL_TMP}"
-
-# Safety repair for any branded environment assignment produced by the
-# generic replacements above.
-sed -i -E 's/^PANEL_NAME=VNM PANEL$/PANEL_NAME="VNM Panel"/' "${VNM_PANEL_TMP}"
 
 info 'Starting the existing VNM Panel direct installer...'
 "${VNM_PANEL_TMP}" "$@"
