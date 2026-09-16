@@ -6,6 +6,10 @@ set -Eeuo pipefail
 #
 # This entrypoint prepares the host first, then downloads the maintained
 # VNM Panel core installer (install-v5.sh).
+#
+# Runtime-compatible HKVM_* variables and /opt/hkvm paths are preserved.
+# Branding is owned by the core installer; this wrapper never rewrites shell
+# identifiers or configuration assignments.
 # ============================================================================
 
 readonly CORE_URL='https://raw.githubusercontent.com/stripathi02123-tech/Vnm-panel/main/install-v5.sh'
@@ -23,9 +27,7 @@ ok(){ printf '%b\n' "${GREEN}[VNM PANEL][OK]${NC} $*"; }
 warn(){ printf '%b\n' "${YELLOW}[VNM PANEL][WARNING]${NC} $*"; }
 die(){ printf '%b\n' "${RED}[VNM PANEL][ERROR]${NC} %s\n" "$*" >&2; exit 1; }
 
-cleanup(){
-    rm -f "${TMP}" "${CORE_TMP}" || true
-}
+cleanup(){ rm -f "${TMP}" "${CORE_TMP}" || true; }
 trap cleanup EXIT
 
 [[ "${EUID}" -eq 0 ]] || die 'Run the VNM Panel installer as root.'
@@ -45,15 +47,11 @@ install_vnm_panel_prerequisites(){
     source /etc/os-release
 
     case "${ID:-}" in
-        ubuntu|debian)
-            ;;
-        *)
-            die "VNM Panel currently requires Debian or Ubuntu for automatic package installation (detected: ${ID:-unknown})."
-            ;;
+        ubuntu|debian) ;;
+        *) die "VNM Panel currently requires Debian or Ubuntu for automatic package installation (detected: ${ID:-unknown})." ;;
     esac
 
     command -v apt-get >/dev/null 2>&1 || die 'apt-get is required on Debian/Ubuntu.'
-
     export DEBIAN_FRONTEND=noninteractive
 
     info 'VNM Panel prerequisite step 1/6: updating APT package lists...'
@@ -87,7 +85,7 @@ install_vnm_panel_prerequisites(){
     info 'VNM Panel prerequisite step 6/6: checking kernel virtualization messages...'
     dmesg | grep -iE 'kvm|virtualiz' | tail -30 || true
 
-    if [[ -r /dev/kvm && -x "$(command -v qemu-system-x86_64)" ]]; then
+    if [[ -r /dev/kvm && -x "$(command -v qemu-system-x86_64)" ]] && command -v timeout >/dev/null 2>&1; then
         info 'Running bounded QEMU/KVM functional test...'
         set +e
         timeout 6s qemu-system-x86_64 \
@@ -108,7 +106,7 @@ install_vnm_panel_prerequisites(){
         fi
         rm -f /tmp/vnm-panel-qemu-test.log || true
     else
-        warn 'Skipping QEMU/KVM functional test because /dev/kvm is unavailable.'
+        warn 'Skipping QEMU/KVM functional test because /dev/kvm or timeout is unavailable.'
     fi
 
     export VNM_PANEL_PREREQS_DONE='true'
@@ -128,14 +126,9 @@ curl -fsSL "${CORE_URL}" -o "${CORE_TMP}"
 [[ -s "${CORE_TMP}" ]] || die 'Downloaded VNM Panel core installer is empty.'
 chmod 700 "${CORE_TMP}"
 
-# Keep the core implementation intact. Only visible branding is normalized;
-# compatibility paths/service names are deliberately not changed.
-sed \
-    -e 's/VNM\/HKVM/VNM PANEL/g' \
-    -e 's/HKVM PANEL/VNM PANEL/g' \
-    -e 's/HKVM/VNM PANEL/g' \
-    -e 's/^PANEL_NAME=VNM PANEL$/PANEL_NAME="VNM Panel"/' \
-    "${CORE_TMP}" > "${TMP}"
+# IMPORTANT: execute the maintained core installer as-is. Do not globally
+# replace HKVM text, because HKVM_* names are valid runtime configuration keys.
+cp -f "${CORE_TMP}" "${TMP}"
 chmod 700 "${TMP}"
 
 info 'Starting VNM Panel core installation...'
