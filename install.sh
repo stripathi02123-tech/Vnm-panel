@@ -128,9 +128,8 @@ curl -fsSL "${CORE_URL}" -o "${CORE_TMP}"
 [[ -s "${CORE_TMP}" ]] || die 'Downloaded VNM Panel core installer is empty.'
 chmod 700 "${CORE_TMP}"
 
-# Keep the core implementation intact while normalizing visible uppercase
-# branding. Lowercase compatibility names (/opt/hkvm, hkvm.service, etc.) are
-# deliberately not changed.
+# Keep the core implementation intact. Only visible branding is normalized;
+# compatibility paths/service names are deliberately not changed.
 sed \
     -e 's/VNM\/HKVM/VNM PANEL/g' \
     -e 's/HKVM PANEL/VNM PANEL/g' \
