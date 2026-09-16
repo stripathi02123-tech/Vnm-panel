@@ -4,13 +4,13 @@ set -Eeuo pipefail
 # ============================================================================
 # VNM PANEL — DIRECT INSTALLER BOOTSTRAP
 #
-# The existing VNM/HKVM direct-install flow is preserved. This wrapper only
-# adds the required virtualization/bootstrap phase before the existing flow:
+# The existing direct-install flow is preserved. This wrapper adds the
+# virtualization/bootstrap phase before the existing flow:
 #   1. Install cloud-image-utils + genisoimage
 #   2. Install qemu-system-x86 + qemu-utils + ovmf
 #   3. Verify QEMU, /dev/kvm and cloud-localds/image tooling
 #   4. Run a bounded KVM functional test when /dev/kvm is available
-#   5. Execute the existing direct installer unchanged in behavior
+#   5. Continue into the existing VNM Panel direct installer
 #
 # Runtime paths/service names remain compatible with the existing installation
 # (/opt/hkvm and hkvm.service). Branding shown by the installer is VNM Panel.
@@ -81,7 +81,7 @@ install_vnm_panel_prerequisites(){
     command -v cloud-localds >/dev/null 2>&1 || warn 'cloud-localds is not available; cloud-init image generation may be unavailable.'
 
     if command -v genisoimage >/dev/null 2>&1; then
-        ok 'genisoimage: $(command -v genisoimage)'
+        ok "genisoimage: $(command -v genisoimage)"
     elif command -v xorriso >/dev/null 2>&1; then
         ok 'xorriso available as ISO generation backend.'
     else
@@ -121,7 +121,7 @@ install_vnm_panel_prerequisites(){
         set -e
 
         # -S intentionally keeps QEMU stopped, so timeout (124) is a valid
-        # result: the process successfully entered the KVM/Q35 startup path.
+        # result: QEMU successfully entered the KVM/Q35 startup path.
         if [[ "${test_rc}" -eq 0 || "${test_rc}" -eq 124 ]]; then
             ok 'QEMU/KVM functional test completed successfully.'
         else
@@ -150,9 +150,9 @@ curl -fsSL "${VNM_PANEL_LEGACY_URL}" -o "${VNM_PANEL_LEGACY_TMP}"
 [[ -s "${VNM_PANEL_LEGACY_TMP}" ]] || die 'Existing direct installer could not be downloaded.'
 chmod 700 "${VNM_PANEL_LEGACY_TMP}"
 
-# Keep the existing implementation/flow, while removing the old HKVM-only
-# uppercase branding from what the user sees. Lowercase compatibility names
-# such as /opt/hkvm and hkvm.service are deliberately untouched.
+# Keep the existing implementation/flow while removing old uppercase HKVM
+# branding from what the user sees. Lowercase compatibility names such as
+# /opt/hkvm and hkvm.service are deliberately untouched.
 sed \
     -e 's/VNM\/HKVM/VNM PANEL/g' \
     -e 's/HKVM PANEL/VNM PANEL/g' \
@@ -162,4 +162,6 @@ sed \
 chmod 700 "${VNM_PANEL_TMP}"
 
 info 'Starting the existing VNM Panel direct installer...'
-exec "${VNM_PANEL_TMP}" "$@"
+"${VNM_PANEL_TMP}" "$@"
+rc=$?
+exit "${rc}"
