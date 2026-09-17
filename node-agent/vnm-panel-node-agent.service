@@ -1,0 +1,22 @@
+[Unit]
+Description=VNM Panel Node Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/vnm-panel-node/agent.env
+ExecStart=/usr/bin/python3 /opt/vnm-panel-node-agent/vnm_node_agent.py
+WorkingDirectory=/opt/vnm-panel-node-agent
+Restart=always
+RestartSec=3
+User=root
+Group=root
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/vnm-panel-node /var/log/vnm-panel-node
+
+[Install]
+WantedBy=multi-user.target
